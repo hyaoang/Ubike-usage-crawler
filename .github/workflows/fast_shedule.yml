@@ -40,7 +40,7 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          git add data/*.duckdb
+          git add *.duckdb
 
           git commit -m "Automated: Update YouBike data in DuckDB" || echo "No changes to commit"
 
