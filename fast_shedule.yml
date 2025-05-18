@@ -1,0 +1,49 @@
+name: Fetch and Process YouBike Data
+
+on:
+  schedule:
+    - cron: '*/6 * * * *'
+
+  workflow_dispatch:
+
+jobs:
+  update-youbike-data:
+    name: Run Scripts and Commit DB
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas duckdb requests jsonlines glob
+
+      - name: Run YouBike Fetch Script
+        run: python main.py
+
+      - name: Run YouBike Process Script
+        run: python dataprocess.py
+
+      - name: Commit and push changes (if any)
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add data/*.duckdb
+
+          git commit -m "Automated: Update YouBike data in DuckDB" || echo "No changes to commit"
+
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
