@@ -7,6 +7,8 @@ import pandas as pd
 import sys
 
 
+# --- DB 設定 ---
+DB_DIR = "."
 DB_BASENAME = "youbike_data_simplified"
 DB_EXTENSION = ".duckdb"
 FILE_SIZE_LIMIT_MB = 90
@@ -32,9 +34,18 @@ def get_active_db_file(base_dir, base_name, extension, size_limit_bytes):
             os.makedirs(base_dir, exist_ok=True)
             return current_filepath, n
 
-DB_FILENAME, current_db_index = get_active_db_file('.', DB_BASENAME, DB_EXTENSION, FILE_SIZE_LIMIT_BYTES)
+
+# --- 定義安全轉換函數 ---
+def safe_int_conversion(value):
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
 
 
+# --- JSON 讀取與 DuckDB 寫入部分 ---
 try:
     list_of_files = glob.glob('youbike_raw_*.json')
     if not list_of_files:
@@ -49,14 +60,6 @@ try:
     with open(latest_raw_json_file, 'r', encoding='utf-8') as f:
         raw_data_list = json.load(f)
 
-    def safe_int_conversion(value):
-        if value is None:
-            return 0
-        try:
-            return int(value)
-        except (ValueError, TypeError):
-            return 0
-
     try:
         processing_timestamp = pd.Timestamp.now(tz='Asia/Taipei')
     except Exception:
@@ -70,7 +73,7 @@ try:
                 available_spaces_detail = station_rt.get('available_spaces_detail', {})
                 if isinstance(available_spaces_detail, dict):
                     s_no_int = safe_int_conversion(station_no_raw)
-                    if s_no_int > 0: # Only proceed if station_no is a valid positive integer
+                    if s_no_int > 0:
                         yb2_raw = available_spaces_detail.get('yb2')
                         eyb_raw = available_spaces_detail.get('eyb')
                         docks_raw = station_rt.get('empty_spaces')
@@ -98,8 +101,9 @@ except Exception:
 if all_records_to_write:
     try:
         df_to_write = pd.DataFrame(all_records_to_write)
-        df_to_write['timestamp'] = pd.to_datetime(df_to_write['timestamp'], utc=True).dt.tz_convert('Asia/Taipei')
-        df_to_write['Station_No'] = pd.to_numeric(df_to_write['Station_No'], errors='coerce').astype('Int64')
+        # 將 timestamp 轉為不帶時區 (DuckDB TIMESTAMP)，Station_No 轉為 Int32 (DuckDB INTEGER)
+        df_to_write['timestamp'] = pd.to_datetime(df_to_write['timestamp']).dt.tz_convert(None)
+        df_to_write['Station_No'] = pd.to_numeric(df_to_write['Station_No'], errors='coerce').astype('Int32')
         df_to_write['Available_Bikes_YB2'] = pd.to_numeric(df_to_write['Available_Bikes_YB2'], errors='coerce').astype('UInt8')
         df_to_write['Available_Bikes_EYB'] = pd.to_numeric(df_to_write['Available_Bikes_EYB'], errors='coerce').astype('UInt8')
         df_to_write['Available_Docks'] = pd.to_numeric(df_to_write['Available_Docks'], errors='coerce').astype('UInt8')
@@ -108,11 +112,15 @@ if all_records_to_write:
         df_to_write.dropna(subset=['timestamp', 'Station_No', 'Available_Bikes_YB2', 'Available_Bikes_EYB', 'Available_Docks', 'Forbidden_Spaces'], inplace=True)
 
         if not df_to_write.empty:
-            with duckdb.connect(database=DB_FILENAME, read_only=False) as con:
+            # 找到目前要寫入的資料庫檔案
+            DB_FILENAME_TO_WRITE, current_db_index = get_active_db_file(DB_DIR, DB_BASENAME, DB_EXTENSION, FILE_SIZE_LIMIT_BYTES)
+
+            with duckdb.connect(database=DB_FILENAME_TO_WRITE, read_only=False) as con:
+                # 使用更緊湊的 schema 定義表格
                 create_table_sql = f"""
                 CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-                    timestamp           TIMESTAMP WITH TIME ZONE,
-                    "Station_No"        BIGINT,
+                    timestamp           TIMESTAMP, -- Use TIMESTAMP
+                    "Station_No"        INTEGER,   -- Use INTEGER
                     "Available_Bikes_YB2" UTINYINT,
                     "Available_Bikes_EYB" UTINYINT,
                     "Available_Docks"   UTINYINT,
@@ -130,3 +138,5 @@ if all_records_to_write:
 
     except Exception:
         sys.exit(1)
+
+sys.exit(0)

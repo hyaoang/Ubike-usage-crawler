@@ -4,6 +4,12 @@ import os
 import datetime
 import json
 import sys
+import urllib3
+import duckdb
+import pandas as pd
+import glob # Add import glob here
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 input_coordinates = [
     {'lat': 22.425263991404677, 'lng': 120.582004057851}, {'lat': 22.580102887267227, 'lng': 120.48209323577278},
@@ -28,7 +34,7 @@ input_coordinates = [
     {'lat': 23.519527071163353, 'lng': 120.56244803542445}, {'lat': 22.581597447588155, 'lng': 120.5792832472417},
     {'lat': 25.173321990522773, 'lng': 121.4729468672537}, {'lat': 22.88952293275849, 'lng': 120.28156235133225},
     {'lat': 24.69839246270602, 'lng': 120.98465249150593}, {'lat': 23.512903568026346, 'lng': 120.1710442196712},
-    {'lat': 24.85602683724819, 'lng': 121.081050039344}, {'lat': 25.17431244729984, 'lng': 121.57215227759824},
+    {'lat': 24.85602683724819, 'lng': 121.081050039344}, {'lat': 25.17431244725984, 'lng': 121.57215227759824},
     {'lat': 25.020494500156612, 'lng': 121.87123388470181}, {'lat': 23.200372218833564, 'lng': 120.17766806543968},
     {'lat': 22.423780881096935, 'lng': 120.48492300943461}, {'lat': 22.81380140183371, 'lng': 120.42912705109582},
     {'lat': 22.657490384528085, 'lng': 120.43204965242876}, {'lat': 22.665784707548486, 'lng': 121.01561065041615},
@@ -48,7 +54,7 @@ input_coordinates = [
     {'lat': 23.044101221222427, 'lng': 120.18093712524313}, {'lat': 22.968495990956114, 'lng': 120.3287248775017},
     {'lat': 23.281076374693868, 'lng': 120.32252489538843}, {'lat': 22.660490968859744, 'lng': 120.6265392803215},
     {'lat': 24.775884049662054, 'lng': 120.93396328853825}, {'lat': 22.578549641930614, 'lng': 120.3849115776941},
-    {'lat': 22.88782670208258, 'lng': 120.18417780565336}, {'lat': 24.93482505152464, 'lng': 121.12933673393988},
+    {'lat': 22.88782670202258, 'lng': 120.18417780565336}, {'lat': 24.93482505152464, 'lng': 121.12933673393988},
     {'lat': 22.113990020251908, 'lng': 120.68424778005516}, {'lat': 25.172265086071757, 'lng': 121.373746884953},
     {'lat': 24.94266465127948, 'lng': 121.9214645387845}, {'lat': 22.346364567055698, 'lng': 120.53484098499591},
     {'lat': 24.697033, 'lng': 120.885859}, {'lat': 22.501176, 'lng': 120.434947},
@@ -56,7 +62,35 @@ input_coordinates = [
 ]
 REALTIME_INFO_URL = "https://apis.youbike.com.tw/tw2/parkingInfo"
 
+# --- DB 設定 (Crawler) ---
+DB_DIR = "."
+DB_BASENAME = "youbike_data_simplified"
+DB_EXTENSION = ".duckdb"
+FILE_SIZE_LIMIT_MB = 90
+FILE_SIZE_LIMIT_BYTES = FILE_SIZE_LIMIT_MB * 1024 * 1024
+TABLE_NAME = "bike_readings_simplified"
 
+def get_active_db_file(base_dir, base_name, extension, size_limit_bytes):
+    n = 1
+    while True:
+        current_filename = f"{base_name}{n if n > 1 else ''}{extension}"
+        current_filepath = os.path.join(base_dir, current_filename)
+
+        if os.path.exists(current_filepath):
+            try:
+                current_size = os.path.getsize(current_filepath)
+                if current_size < size_limit_bytes:
+                    return current_filepath, n
+                else:
+                    n += 1
+            except OSError:
+                n += 1
+        else:
+            os.makedirs(base_dir, exist_ok=True)
+            return current_filepath, n
+
+
+# --- API 抓取部分 (保存到 JSON) ---
 current_time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_JSON_FILENAME = f"youbike_raw_{current_time_str}.json"
 
@@ -109,3 +143,107 @@ if all_stations_combined:
             json.dump(all_stations_combined, f, ensure_ascii=False, indent=2)
     except IOError:
         sys.exit(1)
+
+
+# --- JSON 讀取與 DuckDB 寫入部分 ---
+try:
+    # Use glob.glob from the imported glob module
+    list_of_files = glob.glob('youbike_raw_*.json')
+    if not list_of_files:
+        sys.exit(1)
+    latest_raw_json_file = max(list_of_files, key=os.path.getmtime)
+except Exception:
+    sys.exit(1)
+
+all_records_to_write = []
+raw_data_list = []
+try:
+    with open(latest_raw_json_file, 'r', encoding='utf-8') as f:
+        raw_data_list = json.load(f)
+
+    def safe_int_conversion(value):
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return 0
+
+    try:
+        processing_timestamp = pd.Timestamp.now(tz='Asia/Taipei')
+    except Exception:
+        processing_timestamp = pd.Timestamp.now(tz='UTC')
+
+
+    for station_rt in raw_data_list:
+         if isinstance(station_rt, dict):
+            station_no_raw = station_rt.get('station_no')
+            if station_no_raw is not None:
+                available_spaces_detail = station_rt.get('available_spaces_detail', {})
+                if isinstance(available_spaces_detail, dict):
+                    s_no_int = safe_int_conversion(station_no_raw)
+                    if s_no_int > 0:
+                        yb2_raw = available_spaces_detail.get('yb2')
+                        eyb_raw = available_spaces_detail.get('eyb')
+                        docks_raw = station_rt.get('empty_spaces')
+                        forbidden_raw = station_rt.get('forbidden_spaces')
+
+                        yb2_bikes = safe_int_conversion(yb2_raw)
+                        eyb_bikes = safe_int_conversion(eyb_raw)
+                        docks = safe_int_conversion(docks_raw)
+                        forbidden = safe_int_conversion(forbidden_raw)
+
+                        all_records_to_write.append({
+                            'timestamp': processing_timestamp,
+                            'Station_No': s_no_int,
+                            'Available_Bikes_YB2': yb2_bikes,
+                            'Available_Bikes_EYB': eyb_bikes,
+                            'Available_Docks': docks,
+                            'Forbidden_Spaces': forbidden
+                        })
+
+except (json.JSONDecodeError, IOError):
+    sys.exit(1)
+except Exception:
+    sys.exit(1)
+
+if all_records_to_write:
+    try:
+        df_to_write = pd.DataFrame(all_records_to_write)
+        df_to_write['timestamp'] = pd.to_datetime(df_to_write['timestamp']).dt.tz_convert(None) # TIMESTAMP without time zone
+        df_to_write['Station_No'] = pd.to_numeric(df_to_write['Station_No'], errors='coerce').astype('Int32') # INTEGER
+        df_to_write['Available_Bikes_YB2'] = pd.to_numeric(df_to_write['Available_Bikes_YB2'], errors='coerce').astype('UInt8')
+        df_to_write['Available_Bikes_EYB'] = pd.to_numeric(df_to_write['Available_Bikes_EYB'], errors='coerce').astype('UInt8')
+        df_to_write['Available_Docks'] = pd.to_numeric(df_to_write['Available_Docks'], errors='coerce').astype('UInt8')
+        df_to_write['Forbidden_Spaces'] = pd.to_numeric(df_to_write['Forbidden_Spaces'], errors='coerce').astype('UInt8')
+
+        df_to_write.dropna(subset=['timestamp', 'Station_No', 'Available_Bikes_YB2', 'Available_Bikes_EYB', 'Available_Docks', 'Forbidden_Spaces'], inplace=True)
+
+        if not df_to_write.empty:
+            DB_FILENAME_TO_WRITE, current_db_index = get_active_db_file(DB_DIR, DB_BASENAME, DB_EXTENSION, FILE_SIZE_LIMIT_BYTES)
+
+            with duckdb.connect(database=DB_FILENAME_TO_WRITE, read_only=False) as con:
+                # Use the new, more compact schema
+                create_table_sql = f"""
+                CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+                    timestamp           TIMESTAMP, -- Use TIMESTAMP
+                    "Station_No"        INTEGER,   -- Use INTEGER
+                    "Available_Bikes_YB2" UTINYINT,
+                    "Available_Bikes_EYB" UTINYINT,
+                    "Available_Docks"   UTINYINT,
+                    "Forbidden_Spaces"  UTINYINT,
+                    PRIMARY KEY ("Station_No", timestamp)
+                );
+                """
+                con.execute(create_table_sql)
+
+                insert_sql = f"""
+                INSERT OR IGNORE INTO {TABLE_NAME}
+                SELECT * FROM df_to_write;
+                """
+                con.execute(insert_sql)
+
+    except Exception:
+        sys.exit(1)
+
+sys.exit(0)
