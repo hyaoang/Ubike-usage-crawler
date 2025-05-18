@@ -84,7 +84,7 @@ for i, coord_info in enumerate(input_coordinates):
     lat = coord_info['lat']
     lng = coord_info['lng']
     payload = { "lat": lat, "lng": lng, "maxDistance": MAX_DISTANCE }
-    response_realtime = requests.post(REALTIME_INFO_URL, headers=HEADERS_REALTIME, json=payload, timeout=20)
+    response_realtime = requests.post(REALTIME_INFO_URL, headers=HEADERS_REALTIME, json=payload, timeout=20, verify=False)
     response_realtime.raise_for_status()
     realtime_data = response_realtime.json()
 
