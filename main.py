@@ -58,7 +58,7 @@ REALTIME_INFO_URL = "https://apis.youbike.com.tw/tw2/parkingInfo"
 
 
 current_time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_JSON_FILENAME = os.path("youbike_raw_{current_time_str}.json")
+OUTPUT_JSON_FILENAME = f"youbike_raw_{current_time_str}.json"
 
 HEADERS_REALTIME = {
     'accept': '*/*', 'accept-language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -77,23 +77,35 @@ all_stations_combined = []
 successful_requests = 0
 total_stations_processed = 0
 
-for i, coord_info in enumerate(input_coordinates):
-    lat = coord_info['lat']
-    lng = coord_info['lng']
-    payload = { "lat": lat, "lng": lng, "maxDistance": MAX_DISTANCE }
-    response_realtime = requests.post(REALTIME_INFO_URL, headers=HEADERS_REALTIME, json=payload, timeout=20, verify=False)
-    response_realtime.raise_for_status()
-    realtime_data = response_realtime.json()
+try:
+    for i, coord_info in enumerate(input_coordinates):
+        lat = coord_info['lat']
+        lng = coord_info['lng']
+        payload = { "lat": lat, "lng": lng, "maxDistance": MAX_DISTANCE }
 
-    if isinstance(realtime_data, dict) and realtime_data.get("retCode") == 1 and 'retVal' in realtime_data:
-        stations_nearby_info = realtime_data['retVal']
-        if isinstance(stations_nearby_info, list):
-            successful_requests += 1
-            total_stations_processed += len(stations_nearby_info)
-            all_stations_combined.extend(stations_nearby_info)
+        try:
+            response_realtime = requests.post(REALTIME_INFO_URL, headers=HEADERS_REALTIME, json=payload, timeout=20, verify=False)
+            response_realtime.raise_for_status()
+            realtime_data = response_realtime.json()
 
-    time.sleep(REQUEST_DELAY)
+            if isinstance(realtime_data, dict) and realtime_data.get("retCode") == 1 and 'retVal' in realtime_data:
+                stations_nearby_info = realtime_data['retVal']
+                if isinstance(stations_nearby_info, list):
+                    successful_requests += 1
+                    total_stations_processed += len(stations_nearby_info)
+                    all_stations_combined.extend(stations_nearby_info)
+
+        except requests.exceptions.RequestException:
+            sys.exit(1)
+
+        time.sleep(REQUEST_DELAY)
+
+except Exception:
+    sys.exit(1)
 
 if all_stations_combined:
-    with open(OUTPUT_JSON_FILENAME, 'w', encoding='utf-8') as f:
-        json.dump(all_stations_combined, f, ensure_ascii=False, indent=2)
+    try:
+        with open(OUTPUT_JSON_FILENAME, 'w', encoding='utf-8') as f:
+            json.dump(all_stations_combined, f, ensure_ascii=False, indent=2)
+    except IOError:
+        sys.exit(1)

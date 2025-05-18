@@ -18,6 +18,7 @@ def get_active_db_file(base_dir, base_name, extension, size_limit_bytes):
     while True:
         current_filename = f"{base_name}{n if n > 1 else ''}{extension}"
         current_filepath = os.path.join(base_dir, current_filename)
+
         if os.path.exists(current_filepath):
             try:
                 current_size = os.path.getsize(current_filepath)
@@ -28,12 +29,14 @@ def get_active_db_file(base_dir, base_name, extension, size_limit_bytes):
             except OSError:
                 n += 1
         else:
+            os.makedirs(base_dir, exist_ok=True)
             return current_filepath, n
 
-DB_FILENAME, current_db_index = get_active_db_file(DB_BASENAME, DB_EXTENSION, FILE_SIZE_LIMIT_BYTES)
+DB_FILENAME, current_db_index = get_active_db_file('.', DB_BASENAME, DB_EXTENSION, FILE_SIZE_LIMIT_BYTES)
+
 
 try:
-    list_of_files = glob.glob(os.path('youbike_raw_*.json'))
+    list_of_files = glob.glob('youbike_raw_*.json')
     if not list_of_files:
         sys.exit(1)
     latest_raw_json_file = max(list_of_files, key=os.path.getmtime)
@@ -41,35 +44,42 @@ except Exception:
     sys.exit(1)
 
 all_records_to_write = []
+raw_data_list = []
 try:
     with open(latest_raw_json_file, 'r', encoding='utf-8') as f:
         raw_data_list = json.load(f)
 
-    if not raw_data_list:
-         pass
+    def safe_int_conversion(value):
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return 0
 
     try:
         processing_timestamp = pd.Timestamp.now(tz='Asia/Taipei')
     except Exception:
         processing_timestamp = pd.Timestamp.now(tz='UTC')
 
+
     for station_rt in raw_data_list:
          if isinstance(station_rt, dict):
             station_no_raw = station_rt.get('station_no')
-            if station_no_raw:
+            if station_no_raw is not None:
                 available_spaces_detail = station_rt.get('available_spaces_detail', {})
                 if isinstance(available_spaces_detail, dict):
-                    try:
-                        s_no_int = int(station_no_raw)
+                    s_no_int = safe_int_conversion(station_no_raw)
+                    if s_no_int > 0: # Only proceed if station_no is a valid positive integer
                         yb2_raw = available_spaces_detail.get('yb2')
                         eyb_raw = available_spaces_detail.get('eyb')
                         docks_raw = station_rt.get('empty_spaces')
                         forbidden_raw = station_rt.get('forbidden_spaces')
 
-                        yb2_bikes = int(yb2_raw) if str(yb2_raw).isdigit() else 0
-                        eyb_bikes = int(eyb_raw) if str(eyb_raw).isdigit() else 0
-                        docks = int(docks_raw) if str(docks_raw).isdigit() else 0
-                        forbidden = int(forbidden_raw) if str(forbidden_raw).isdigit() else 0
+                        yb2_bikes = safe_int_conversion(yb2_raw)
+                        eyb_bikes = safe_int_conversion(eyb_raw)
+                        docks = safe_int_conversion(docks_raw)
+                        forbidden = safe_int_conversion(forbidden_raw)
 
                         all_records_to_write.append({
                             'timestamp': processing_timestamp,
@@ -79,8 +89,6 @@ try:
                             'Available_Docks': docks,
                             'Forbidden_Spaces': forbidden
                         })
-                    except (ValueError, TypeError):
-                        pass
 
 except (json.JSONDecodeError, IOError):
     sys.exit(1)
@@ -90,7 +98,7 @@ except Exception:
 if all_records_to_write:
     try:
         df_to_write = pd.DataFrame(all_records_to_write)
-        df_to_write['timestamp'] = pd.to_datetime(df_to_write['timestamp'])
+        df_to_write['timestamp'] = pd.to_datetime(df_to_write['timestamp'], utc=True).dt.tz_convert('Asia/Taipei')
         df_to_write['Station_No'] = pd.to_numeric(df_to_write['Station_No'], errors='coerce').astype('Int64')
         df_to_write['Available_Bikes_YB2'] = pd.to_numeric(df_to_write['Available_Bikes_YB2'], errors='coerce').astype('UInt8')
         df_to_write['Available_Bikes_EYB'] = pd.to_numeric(df_to_write['Available_Bikes_EYB'], errors='coerce').astype('UInt8')
@@ -114,10 +122,9 @@ if all_records_to_write:
                 """
                 con.execute(create_table_sql)
 
-                columns_list = ", ".join([f'"{col}"' for col in df_to_write.columns])
                 insert_sql = f"""
-                INSERT OR IGNORE INTO {TABLE_NAME} ({columns_list})
-                SELECT {columns_list} FROM df_to_write;
+                INSERT OR IGNORE INTO {TABLE_NAME}
+                SELECT * FROM df_to_write;
                 """
                 con.execute(insert_sql)
 
