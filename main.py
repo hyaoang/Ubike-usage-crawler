@@ -56,9 +56,9 @@ input_coordinates = [
 ]
 REALTIME_INFO_URL = "https://apis.youbike.com.tw/tw2/parkingInfo"
 
-OUTPUT_DIR = "raw_data"
+
 current_time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_JSON_FILENAME = os.path.join(OUTPUT_DIR, f"youbike_raw_{current_time_str}.json")
+OUTPUT_JSON_FILENAME = os.path("youbike_raw_{current_time_str}.json")
 
 HEADERS_REALTIME = {
     'accept': '*/*', 'accept-language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -72,9 +72,6 @@ HEADERS_REALTIME = {
 
 MAX_DISTANCE = 10000
 REQUEST_DELAY = 0.1
-
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
 
 all_stations_combined = []
 successful_requests = 0

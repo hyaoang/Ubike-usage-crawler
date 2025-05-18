@@ -6,16 +6,12 @@ import duckdb
 import pandas as pd
 import sys
 
-RAW_DATA_DIR = ""
-DB_DIR = ""
+
 DB_BASENAME = "youbike_data_simplified"
 DB_EXTENSION = ".duckdb"
 FILE_SIZE_LIMIT_MB = 90
 FILE_SIZE_LIMIT_BYTES = FILE_SIZE_LIMIT_MB * 1024 * 1024
 TABLE_NAME = "bike_readings_simplified"
-
-if not os.path.exists(DB_DIR):
-    os.makedirs(DB_DIR)
 
 def get_active_db_file(base_dir, base_name, extension, size_limit_bytes):
     n = 1
@@ -34,10 +30,10 @@ def get_active_db_file(base_dir, base_name, extension, size_limit_bytes):
         else:
             return current_filepath, n
 
-DB_FILENAME, current_db_index = get_active_db_file(DB_DIR, DB_BASENAME, DB_EXTENSION, FILE_SIZE_LIMIT_BYTES)
+DB_FILENAME, current_db_index = get_active_db_file(DB_BASENAME, DB_EXTENSION, FILE_SIZE_LIMIT_BYTES)
 
 try:
-    list_of_files = glob.glob(os.path.join(RAW_DATA_DIR, 'youbike_raw_*.json'))
+    list_of_files = glob.glob(os.path('youbike_raw_*.json'))
     if not list_of_files:
         sys.exit(1)
     latest_raw_json_file = max(list_of_files, key=os.path.getmtime)
